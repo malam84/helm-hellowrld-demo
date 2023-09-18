@@ -180,3 +180,107 @@ spec:
         }
     }
 }
+-----
+
+pipeline {
+  // Use Jenkins Maven slave
+  // Jenkins will dynamically provision this as OpenShift Pod
+  // All the stages and steps of this Pipeline will be executed on this Pod
+  // After Pipeline completes the Pod is killed so every run will have clean
+  // workspace
+  agent {
+    kubernetes {
+      cloud 'openshift'                              
+      defaultContainer 'jnlp'                        
+      label "test"  
+      yaml """
+apiVersion: v1
+kind: Pod
+metadata:
+  labels:
+    pod-template: jenkins-podman-demo
+spec:
+  serviceAccount: jenkins                            
+  serviceAccountName: jenkins                      
+  containers:
+  - name: jnlp                                       
+    image: image-registry.openshift-image-registry.svc:5000/openshift/ose-jenkins-base-agent:latest
+    tty: true
+    alwaysPull: true
+    workingDir: /tmp                                  
+    env:
+    - name: PATH
+      value: /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/tmp/bin
+"""
+    }
+  }
+    
+     environment {
+        OPENSHIFT_URL= "https://api.ocpuat.hla.hlinsurance.my:6443"
+        OPENSHIFT_REGISTRY_URL_INTERNAL= "image-registry.openshift-image-registry.svc:5000"
+        SERVICEACCOUNT= "jenkins"
+        NAMESPACE="redhat-pipeline-demo"
+    }
+    
+    stages {
+         stage('AgentServiceBuilding') {
+            steps {
+				
+                sh '''
+				export JAVA_HOME=/usr/lib/jvm/java-11-openjdk-11.0.20.0.8-2.el8.x86_64/
+				export HTTPS_PROXY=http://10.255.16.152:8080
+				export http_proxy=http://10.255.16.152:8080
+                export https_proxy=http://10.255.16.152:8080
+				echo $JAVA_HOME
+                '''
+                // dir("./var/lib/jenkins/jobs/agent-service-mvn-dev-New-pipeline/workspace") {
+                //     //sh "cd /var/lib/jenkins/workspace/agent-service-pipeline && sudo docker build --build-arg http_proxy=http://10.255.16.152:8080 --build-arg https_proxy=http://10.255.16.152:8080 . "
+                //     //sh "oc login --insecure-skip-tls-verify -u ocp4admin1 -p Redhat123 --server=https://api.ocpuat.hla.hlinsurance.my:6443"
+                //     //sh "oc project ci-uat"
+                //     //sh "oc patch bc ${application_name} -p '{\"metadata\":{\"labels\":{\"imagetag\":\"agentservice-tag\"}},\"spec\":{\"output\":{\"to\":{\"name\":\"dev-agentservice:latest\"}}}}'"
+                //     //sh "oc start-build ${application_name} -n ci-uat --from-dir . --follow --wait"
+                //     //sh "oc project ci-uat"
+                //     //sh '/var/lib/jenkins/.ansible/roles/podman/podman-linux-amd64/usr/local/bin/podman login -u $SERVICEACCOUNT -p $TOKEN $OPENSHIFT_REGISTRY_URL_INTERNAL --tls-verify=false'
+                // }
+            }
+        }
+        stage("Clone git Repository") {
+            steps {
+                withCredentials([gitUsernamePassword(credentialsId: 'hlajenkins', gitToolName: 'Default')]) {
+                    sh 'git -c http.sslVerify=false clone --branch feature/MIC-22 http://10.151.38.176/root/hla-agent-service.git'
+                    sh 'pwd'
+                    sh 'ls -ltr'
+                }
+            }
+            //    git(
+            //        url: 'http://10.151.38.176/root/hla-agent-service.git'
+            //        credentialsId: 'hlajenkins'
+            //        branch: 'feature/MIC-22'
+            //        )
+            //     echo "clone done ..........."      
+         //   }
+        }
+        
+         stage('login openshift'){
+            steps {
+                withCredentials([string(credentialsId: 'openshift-token', variable: 'TOKEN')]){
+                    sh 'oc login --insecure-skip-tls-verify $OPENSHIFT_URL --token=$TOKEN'
+                  //  sh "oc project ${NAMESPACE}"
+                    echo "inside namespace: ${NAMESPACE}"
+                }
+            }
+         }
+        stage('build image'){
+            steps {
+                  echo '========== START podman login and build ==============='
+                 container('jnlp'){
+            sh """
+            podman login --tls-verify=false -u jenkins -p \$(oc whoami -t) ${OPENSHIFT_REGISTRY_URL_INTERNAL}
+            podman build --tls-verify=false --squash -t ${OPENSHIFT_REGISTRY_URL_INTERNAL}/redhat-pipeline-demo/hla-agent-service -f ./hla-agent-service/Dockerfile
+        """
+        echo '========== END podman docker build'
+            }
+        }
+      }
+    }
+}
