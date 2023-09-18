@@ -116,3 +116,67 @@ nodeSelector: {}
 tolerations: []
 
 affinity: {}
+
+
+----
+pipeline {
+  // Use Jenkins Maven slave
+  // Jenkins will dynamically provision this as OpenShift Pod
+  // All the stages and steps of this Pipeline will be executed on this Pod
+  // After Pipeline completes the Pod is killed so every run will have clean
+  // workspace
+  agent {
+    kubernetes {
+      cloud 'openshift'                              
+      defaultContainer 'jnlp'                        
+      label "test"  
+      yaml """
+apiVersion: v1
+kind: Pod
+metadata:
+  labels:
+    pod-template: jenkins-slave-sidecars
+spec:
+  serviceAccount: jenkins                            
+  serviceAccountName: jenkins                      
+  containers:
+  - name: jnlp                                       
+    image: default-route-openshift-image-registry.apps-crc.testing/openshift/ose-jenkins-agent:latest
+    tty: true
+    alwaysPull: true
+    workingDir: /tmp                                  
+    env:
+    - name: PATH
+      value: /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/tmp/bin
+"""
+    }
+  }
+    
+     environment {
+        OPENSHIFT_URL= "https://api.crc.testing:6443"
+        OPENSHIFT_REGISTRY_URL_INTERNAL= "default-route-openshift-image-registry.apps-crc.testing"
+        SERVICEACCOUNT= "jenkins-podman"
+        NAMESPACE="podman-demo"
+    }
+    
+    stages {
+        stage('login podman') {
+            steps {
+                echo '========== START podman login and build ==============='
+                 container('jnlp'){
+            sh """
+            podman login --tls-verify=false -u jenkins -p \$(oc whoami -t) ${OPENSHIFT_REGISTRY_URL_INTERNAL}
+            """
+              echo '========== START podman login and build done ==============='
+                 }
+                // withCredentials([string(credentialsId: 'openshift-token', variable: 'TOKEN')]) {
+                //     container('podman'){
+                //           echo "inside podman ..........."
+                //          sh 'podman login -u $SERVICEACCOUNT -p $TOKEN $OPENSHIFT_REGISTRY_URL_INTERNAL --tls-verify=false'
+                //          echo "outside podman ..........."
+                //     }
+                // }
+            }
+        }
+    }
+}
